@@ -1,0 +1,213 @@
+# Local infrastructure for the Real-Time Data Sync Platform.
+#
+# Services:
+#   postgres   - system of record for sync events, idempotency keys, conflicts
+#   zookeeper  - Kafka cluster coordination (Confluent 7.x still uses ZK)
+#   kafka      - event streaming broker (wired into the app in Phase 2)
+#   redis      - caching / rate limiting (used in later phases)
+#   kafka-ui   - web UI for inspecting topics and consumer groups
+#
+# Monitoring profile (Phase 4) - start with `--profile monitoring`:
+#   jaeger     - traces (OTLP in on 4317/4318, UI on 16686)
+#   prometheus - scrapes the app's /metrics on the host (UI on 9090)
+#   grafana    - dashboards, auto-provisioned from monitoring/ (UI on 3000)
+#
+# App profile - the API itself in a container (same image as the cloud deploy):
+#   app        - `--profile app`, on http://localhost:8001
+#
+# Usage:
+#   docker compose up -d                          # infrastructure only
+#   docker compose --profile monitoring up -d     # + Jaeger, Prometheus, Grafana
+#   docker compose ps                             # all services should report "healthy"
+#   docker compose down                           # stop (data is kept in named volumes)
+#   docker compose down -v                        # stop AND wipe all data
+
+name: sync-platform
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: sync-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sync_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sync_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sync_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: sync-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "zookeeper-shell localhost:2181 ls / > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: sync-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners: containers talk to kafka:29092, the host talks to localhost:9092.
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Single-broker dev cluster: replication factors must be 1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: sync-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: sync-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # --- monitoring profile -------------------------------------------------------
+
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    container_name: sync-jaeger
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP (the app exports here)
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    container_name: sync-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # Lets the container reach the app running on the host (uvicorn on :8000).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    container_name: sync-grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # local demo: dashboards viewable without login
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Read by monitoring/grafana/provisioning/datasources/postgres.yml
+      POSTGRES_USER: ${POSTGRES_USER:-sync_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sync_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sync_db}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring:/var/lib/grafana/dashboards/sync:ro
+      - grafana_data:/var/lib/grafana
+
+  # --- app profile ----------------------------------------------------------------
+
+  app:
+    build: .
+    image: sync-platform:latest
+    container_name: sync-app
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sync_user}:${POSTGRES_PASSWORD:-sync_password}@postgres:5432/${POSTGRES_DB:-sync_db}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      TRACING_ENABLED: "true"
+      OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_SERVICE_NAME: sync-platform-container
+
+volumes:
+  postgres_data:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

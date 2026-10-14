@@ -1,0 +1,21 @@
+# Prometheus config for local monitoring (docker compose --profile monitoring up -d).
+#
+# Scrapes the app's /metrics endpoint. Targets:
+#   host.docker.internal:8000  - uvicorn running on your machine (the usual dev setup)
+#   app:8000                   - the containerised app (docker compose --profile app)
+# A target that isn't running just shows as DOWN under Status -> Targets; harmless.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: sync-platform
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          instance: local-dev
+      - targets: ["app:8000"]
+        labels:
+          instance: container

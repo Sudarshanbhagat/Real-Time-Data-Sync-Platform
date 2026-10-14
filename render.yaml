@@ -1,0 +1,72 @@
+# Render Blueprint: Render -> New -> Blueprint -> pick this repo.
+#
+# Creates:
+#   sync-platform-api  Docker web service (free plan): API + background processor
+#   sync-platform-db   PostgreSQL (free plan: 1 GB, expires 30 days after creation)
+#
+# Kafka is not offered by Render. Use a managed cluster - the setup in
+# README.md "Cloud deployment" uses Aiven's free Kafka tier - and paste its
+# connection details into the env vars marked `sync: false` when Render asks.
+#
+# Free-plan caveats (see README): the web service sleeps after 15 min without
+# traffic (first request then takes ~1 min) and has 0.1 CPU / 512 MB, so expect
+# lower throughput than on a laptop. Background workers have no free plan, which
+# is why the processor runs inside the web service (RUN_SYNC_PROCESSOR=true).
+
+services:
+  - type: web
+    name: sync-platform-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Render gives postgresql://...; docker/entrypoint.sh adds the +asyncpg driver.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sync-platform-db
+          property: connectionString
+      # Small pool: free Postgres allows few connections and the instance has 0.1 CPU.
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+      - key: SYNC_PROCESSOR_CONCURRENCY
+        value: "4"
+      - key: RUN_SYNC_PROCESSOR
+        value: "true"
+      # --- Kafka (Aiven free tier: SSL with client certificates) ---------------
+      - key: KAFKA_BOOTSTRAP_SERVERS        # e.g. kafka-xxxx.aivencloud.com:12345
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SSL
+      - key: KAFKA_SSL_CA_PEM               # contents of ca.pem
+        sync: false
+      - key: KAFKA_SSL_CERT_PEM             # contents of service.cert
+        sync: false
+      - key: KAFKA_SSL_KEY_PEM              # contents of service.key
+        sync: false
+      # Aiven's free tier allows at most 2 partitions per topic.
+      - key: KAFKA_TOPIC_PARTITIONS
+        value: "2"
+      - key: KAFKA_TOPIC_REPLICATION
+        value: "2"
+      # --- Tracing (optional) ---------------------------------------------------
+      # Off by default in the cloud (no Jaeger there). To enable, point it at any
+      # OTLP/HTTP endpoint, e.g. a Jaeger you host or Grafana Cloud Traces.
+      - key: TRACING_ENABLED
+        value: "false"
+      - key: OTLP_TRACES_ENDPOINT
+        sync: false
+
+databases:
+  - name: sync-platform-db
+    plan: free
+    databaseName: sync_db
+    user: sync_user

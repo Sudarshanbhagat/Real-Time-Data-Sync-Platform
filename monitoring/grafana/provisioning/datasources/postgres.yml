@@ -1,0 +1,22 @@
+# Postgres datasource for the Errors dashboard's "Top 10 error messages" and
+# "Recent failed syncs" tables. Error *text* is unbounded, so it lives in the
+# database (sync_events.error_message) rather than in Prometheus labels.
+#
+# Local demo uses the app's own credentials. In production create a read-only
+# role, e.g.:  CREATE ROLE grafana_ro LOGIN PASSWORD '...';
+#              GRANT SELECT ON sync_events TO grafana_ro;
+apiVersion: 1
+
+datasources:
+  - name: SyncDB
+    uid: syncdb
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: ${POSTGRES_USER}
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable
+      postgresVersion: 1500
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}

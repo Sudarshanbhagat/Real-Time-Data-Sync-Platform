@@ -1,0 +1,15 @@
+# Runtime dependencies, pinned to the versions the test suite was run against.
+# (pyproject.toml lists the same packages with ranges; this file is what the
+# Docker image installs, for reproducible builds.)
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+sqlalchemy[asyncio]==2.1.4
+asyncpg==0.32.0
+pydantic==2.14.0
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+aiokafka==0.14.0
+prometheus-client==0.26.0
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1

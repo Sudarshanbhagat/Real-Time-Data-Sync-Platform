@@ -1,0 +1,10 @@
+# Loads every monitoring/grafana_dashboard_*.json into a "Sync Platform" folder.
+apiVersion: 1
+
+providers:
+  - name: sync-platform
+    folder: Sync Platform
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/sync

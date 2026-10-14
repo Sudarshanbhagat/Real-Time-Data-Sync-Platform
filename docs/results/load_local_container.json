@@ -1,0 +1,99 @@
+{
+  "label": "Local Docker container (laptop)",
+  "url": "http://localhost:8001",
+  "results": [
+    {
+      "name": "100 sequential",
+      "requests": 100,
+      "concurrency": 1,
+      "duration_s": 6.28,
+      "throughput_rps": 15.9,
+      "p50_ms": 58.4,
+      "p95_ms": 90.1,
+      "p99_ms": 95.6,
+      "errors": 0,
+      "error_rate": 0.0,
+      "pipeline_s": 8.07,
+      "pipeline_eps": 12.4,
+      "synced": 100,
+      "failed": 0,
+      "status_codes": {
+        "200": 100
+      }
+    },
+    {
+      "name": "100 x c10",
+      "requests": 100,
+      "concurrency": 10,
+      "duration_s": 2.87,
+      "throughput_rps": 34.8,
+      "p50_ms": 245.6,
+      "p95_ms": 500.5,
+      "p99_ms": 622.5,
+      "errors": 0,
+      "error_rate": 0.0,
+      "pipeline_s": 6.51,
+      "pipeline_eps": 15.4,
+      "synced": 100,
+      "failed": 0,
+      "status_codes": {
+        "200": 100
+      }
+    },
+    {
+      "name": "100 x c50",
+      "requests": 100,
+      "concurrency": 50,
+      "duration_s": 4.46,
+      "throughput_rps": 22.4,
+      "p50_ms": 1547.1,
+      "p95_ms": 3728.5,
+      "p99_ms": 4264.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "pipeline_s": 8.28,
+      "pipeline_eps": 12.1,
+      "synced": 100,
+      "failed": 0,
+      "status_codes": {
+        "200": 100
+      }
+    },
+    {
+      "name": "1000 x c50",
+      "requests": 1000,
+      "concurrency": 50,
+      "duration_s": 50.82,
+      "throughput_rps": 19.7,
+      "p50_ms": 1747.2,
+      "p95_ms": 6845.3,
+      "p99_ms": 10818.0,
+      "errors": 0,
+      "error_rate": 0.0,
+      "pipeline_s": 86.16,
+      "pipeline_eps": 11.6,
+      "synced": 1000,
+      "failed": 0,
+      "status_codes": {
+        "200": 1000
+      }
+    }
+  ],
+  "processor": {
+    "running": true,
+    "processed": 1047,
+    "synced": 1047,
+    "failed": 0,
+    "duplicates_skipped": 1850,
+    "missing": 3371,
+    "db_errors": 0,
+    "restarts": 0,
+    "error_rate": 0.0,
+    "latency_ms": {
+      "samples": 1047,
+      "p50": 10.83,
+      "p95": 18.99,
+      "p99": 24.249
+    }
+  }
+}
