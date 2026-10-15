@@ -202,10 +202,10 @@ file (`-d "@body.json"`) to avoid quoting issues.
 |---|---|
 | Startup log: `Kafka unreachable at startup` | Broker not running: `docker compose up -d kafka`; check `docker compose ps` says *healthy*. The app reconnects by itself on the next sync. |
 | `POST /sync` returns 500 "saved but not published" | Kafka is down or slow (> `KAFKA_PUBLISH_TIMEOUT_MS`). The sync is saved; retry with the same `idempotency_key` once Kafka is back. |
-| `KafkaConnectionError: Unable to bootstrap from localhost:9092` | Port mismatch (`KAFKA_PORT` in `.env`), or another process holds 9092. The app must use `localhost:9092`; containers use `kafka:29092`. |
+| `KafkaConnectionError: Unable to bootstrap from localhost:9092` | Port mismatch (`KAFKA_PORT` in `.env`), or another process holds 9092. The app must use `localhost:9092`; containers use `kafka[...]` |
 | Connects, then errors mentioning host `kafka` | You're using the internal listener from the host. Use `KAFKA_BOOTSTRAP_SERVERS=localhost:9092`. |
 | `UnknownTopicOrPartitionError` right after Kafka restarts | Broker is still loading; wait for *healthy* and retry. |
-| Consumer reads nothing | The group already committed past those messages. Check lag with `kafka-consumer-groups --describe`; replay with `kafka-consumer-groups --bootstrap-server localhost:9092 --group sync_group --reset-offsets --to-earliest --topic sync_events --execute` (stop the consumer first). |
+| Consumer reads nothing | The group already committed past those messages. Check lag with `kafka-consumer-groups --describe`; replay with `kafka-consumer-groups --bootstrap-server localhost:9092[...]` |
 | Kafka tests show as *skipped* | Broker unreachable; they skip instead of failing. Start Docker and re-run. |
 | `column sync_events.published_at does not exist` | Phase 1 database: run `python scripts/setup_db.py`. |
 
@@ -249,8 +249,8 @@ order. The DB pool is shared with the API, so keep the concurrency below `DB_POO
 |---|---|---|
 | `entity_id` | string | required |
 | `name` | string | required, non-empty, ≤ 255 chars |
-| `email` | string \| null | if present, must look like an address |
-| `status` | string \| null | ≤ 50 chars |
+| `email` | string | null | if present, must look like an address |
+| `status` | string | null | ≤ 50 chars |
 | `metadata` | object | every source field that was not mapped (keys snake_cased) |
 
 Plus `schema_version`, `source_system` and `transformed_at`.
@@ -395,8 +395,8 @@ Expect much higher on Linux. Phase 4 should re-measure in the deployment environ
 |---|---|
 | Syncs stay `pending` | Processor not running. Check `GET /health/processor` → `running`; check `RUN_SYNC_PROCESSOR` isn't `false`; look for `sync_processor_crashed` in the log. |
 | Some syncs stay `pending`, `published_at` is null | They were never published (Kafka was down and the client didn't retry). See "Recovery" above. |
-| Syncs stay `pending` while `python -m src.kafka.consumer` runs | The logging consumer is in the same group and took the partitions. Stop it. Events it already read are lost to the processor. Reset the group offsets to replay them (see above). |
-| Log repeats `sync_processor_crashed ... restart_in_s=...` | Kafka or the DB is unreachable. The processor backs off up to 30 s and recovers on its own once the dependency is back. Nothing is committed in the meantime, so nothing is lost. |
+| Syncs stay `pending` while `python -m src.kafka.consumer` runs | The logging consumer is in the same group and took the partitions. Stop it. Events it already read are lost to the processor. Re[...] |
+| Log repeats `sync_processor_crashed ... restart_in_s=...` | Kafka or the DB is unreachable. The processor backs off up to 30 s and recovers on its own once the dependency is back. Nothing is co[...] |
 | `sync_process_missing` warnings | Kafka has events for rows that no longer exist (DB was reset with `--reset`). Harmless. To clear them, reset `sync_group` offsets `--to-latest`. |
 | Many `failed` syncs | Read `error_message`. Usually the source sends fields under different names than the mapping expects (see the table above). |
 | `column sync_events.processed_at does not exist` | Run `python scripts/setup_db.py`. |
@@ -449,7 +449,7 @@ Provisioned automatically into the **Sync Platform** folder. Nothing needs impor
 
 | File | Dashboard | Panels |
 |---|---|---|
-| `monitoring/grafana_dashboard_overview.json` | System Overview | Syncs accepted, success rate, processor concurrency, processor up/down, throughput, concurrency & batch size, error rate (24h), errors by type (24h) |
+| `monitoring/grafana_dashboard_overview.json` | System Overview | Syncs accepted, success rate, processor concurrency, processor up/down, throughput, concurrency & batch size, error rate (24h), [...] |
 | `monitoring/grafana_dashboard_performance.json` | Performance | API / processor / Kafka / end-to-end p50-p95-p99, Kafka publish heatmap, transform p95 by system, throughput |
 | `monitoring/grafana_dashboard_errors.json` | Errors | Error rate by type, failed syncs by source system, **top 10 error messages** and recent failures (from Postgres) |
 
@@ -547,7 +547,7 @@ Steps:
    `.gitignore` already excludes `.env` and certificate files.
 2. **Kafka on Aiven.** Create a free account → *Create service* → Apache Kafka → *Free* plan.
    - When it's running, go to *Overview* → *Connection information*. Note the *Service URI*
-     (`host:port`) and download **ca.pem**, **service.cert** and **service.key**.
+     (`host:port`) and download **ca.pem**, **service.cert** and **service.key`**.
    - Under *Topics* → *Add topic*, create `sync_events` with 2 partitions. The app also
      tries to create it at startup.
 3. **Render blueprint.** In the Render dashboard: *New* → *Blueprint* → choose the repo.
@@ -621,6 +621,60 @@ How to read this table:
 
 Raw results: `docs/results/load_local_container.json`.
 
+## Deployed API Testing & Performance Results
+
+The deployed API was validated using PowerShell HTTP requests and [k6](https://grafana.com/docs/k6/latest/) to evaluate endpoint availability, database readiness, background processing, asynchronous synchronization, and idempotency.
+
+**Test environment:** Deployed Render API  
+**Load-test duration:** 30 seconds per run  
+**Load generator:** k6  
+**Test type:** Controlled baseline testing against the live API
+
+### Performance benchmarks
+
+#### Health endpoint — `GET /health`
+
+| Virtual Users | Duration | Requests | Avg. Latency | p95 Latency | HTTP Failures |
+|---:|---:|---:|---:|---:|---:|
+| 5 | 30 s | 123 | 245.76 ms | 250.80 ms | 0% |
+| 10 | 30 s | 247 | 242.97 ms | 255.54 ms | 0% |
+| 20 | 30 s | 495 | 243.53 ms | 272.42 ms | 0% |
+
+All three runs completed with zero HTTP request failures. The p95 response time remained below 273 ms across the tested concurrency levels.
+
+#### Database-backed status endpoint — `GET /api/v1/status/{entity_id}`
+
+| Virtual Users | Duration | Requests | Avg. Latency | p95 Latency | HTTP Failures |
+|---:|---:|---:|---:|---:|---:|
+| 5 | 30 s | 120 | 262.04 ms | 294.52 ms | 0% |
+
+All 120 requests returned HTTP 200, and all checks confirmed that the target entity remained in the `synced` state.
+
+### Functional verification
+
+| Test | Result |
+|---|---|
+| API liveness — `GET /health` | Passed — HTTP 200 |
+| Database readiness — `GET /health/ready` | Passed — HTTP 200; database reported `ok` |
+| Background processor health | Passed — processor reported running |
+| Valid sync submission | Passed — event accepted with initial status `pending` |
+| Asynchronous sync completion | Passed — event reached `synced` |
+| Database-backed status lookup | Passed — HTTP 200; canonical data returned |
+| Idempotency replay | Passed — duplicate request returned `idempotent_replay: true` and reused sync ID `3` |
+| Processor metrics after sync | Passed — 1 processed, 1 synced, 0 failed, 0 database errors at observation time |
+
+### Methodology and limitations
+
+- The k6 health and status tests used 5, 10, and 20 virtual users as configured above.
+- Each virtual user waits one second between iterations. Therefore, the observed request rates represent this test configuration, not the maximum capacity of the service.
+- These results are baseline measurements from the deployed environment, not a maximum-throughput benchmark or a guarantee of production-scale reliability.
+- The synchronization test used a synthetic record and verified its transition from `pending` to `synced`. A repeated request with the same idempotency key returned the original sync ID.
+- Latency measurements include network and hosting overhead; they should not be interpreted as database-only or Kafka-only latency.
+
+### Test evidence
+
+Screenshots of the test outputs are maintained with the project documentation. They include k6 benchmark summaries, API health checks, sync completion, idempotency replay, and processor metrics.
+
 ## Data model
 
 - `sync_events`: raw `source_data`, `canonical_data`, `status` (`pending` → `synced`/`failed`),
@@ -658,9 +712,9 @@ src/
     schemas.py       SyncEventMessage: the JSON wire format
     producer.py      SyncEventProducer (aiokafka), FastAPI dependency get_producer()
     consumer.py      SyncEventConsumer (group sync_group); `python -m src.kafka.consumer`
-  observability/
-    metrics.py       Prometheus metrics (served at /metrics)
-    tracing.py       OpenTelemetry setup, OTLP export, Kafka header propagation
+    observability/
+      metrics.py       Prometheus metrics (served at /metrics)
+      tracing.py       OpenTelemetry setup, OTLP export, Kafka header propagation
   models/            SQLAlchemy ORM models
   schemas/           Pydantic request/response models
   routes/            health (+ /health/processor metrics) and sync endpoints
